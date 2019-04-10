@@ -326,7 +326,7 @@ def run_cnn(input, data_format="NCHW"):
         x = tf.transpose(x, (0, 2, 3, 1))
 
     filter = tf.constant(np.ones((5, 5, 1, 16)), dtype=tf.float32, name="weights")
-    x = tf.nn.conv2d(x, filter, (1, 1, 1, 1), "SAME", name="conv2d")
+    x = tf.nn.conv2d(x, filter, (1, 1, 1, 1), "SAME", name="nn_conv2d")
 
     with tf.Session() as sess:
         output = sess.run(x, feed_dict={feed_me: input})
@@ -341,7 +341,7 @@ def export_cnn(filename: str, input_shape: List[int], data_format="NCHW"):
     input = tf.placeholder(tf.float32, shape=input_shape, name="input")
 
     filter = tf.constant(np.ones((5, 5, 1, 16)), dtype=tf.float32, name="weights")
-    x = tf.nn.conv2d(input, filter, (1, 1, 1, 1), "SAME", data_format=data_format, name="conv2d")
+    x = tf.nn.conv2d(input, filter, (1, 1, 1, 1), "SAME", data_format=data_format, name="nn_conv2d")
 
     return export(x, filename)
 
