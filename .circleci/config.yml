@@ -1,9 +1,6 @@
 version: 2
 
 variables:
-  docker-caching: &docker-caching
-    setup_remote_docker:
-      docker_layer_caching: true
   bootstrap: &bootstrap
     run:
       name: Bootstrap the environment
@@ -16,21 +13,21 @@ variables:
       name: bootstrap setup
       command: |
         if [ ! -f Miniconda3-latest-MacOSX-x86_64.sh ]; then
-          curl -O https://repo.continuum.io/miniconda/Miniconda3-latest-MacOSX-x86_64.sh
+          curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh
         fi
 
         bash Miniconda3-latest-MacOSX-x86_64.sh -b -f
-        ../miniconda3/bin/conda create -n py35 python=3.5 2> /dev/null || true
-        ../miniconda3/envs/py35/bin/python -m venv venv
+        ../miniconda3/bin/conda create -n py38 python=3.8 --yes 2> /dev/null || true
+        ../miniconda3/envs/py38/bin/python -m venv venv
         . venv/bin/activate
 
-        HOMEBREW_NO_AUTO_UPDATE=1 brew install libtool automake
+        HOMEBREW_NO_AUTO_UPDATE=1 brew install libtool automake libomp
 
         make bootstrap
-  docker-login: &docker-login
-    run:
-      name: Login to Docker
-      command: make docker-login
+  # docker-login: &docker-login
+  #   run:
+  #     name: Login to Docker
+  #     command: make docker-login
   build-release: &build-release
     run:
       name: Build and push release artifacts (e.g. docker containers)
@@ -41,8 +38,6 @@ variables:
     restore_cache:
       keys:
         - v3-dependencies-{{ checksum "requirements.txt" }}
-        # fallback to using the latest cache if no exact match is found
-        - v3-dependencies-
   save-cache: &save-cache
     save_cache:
       paths:
@@ -52,7 +47,6 @@ variables:
     restore_cache:
       keys:
         - v3-mac-dependencies-{{ checksum "requirements.txt" }}
-        - v3-mac-dependencies-
   save-cache-mac: &save-cache-mac
     save_cache:
       paths:
@@ -61,30 +55,42 @@ variables:
         - ./Miniconda3-latest-MacOSX-x86_64.sh
       key: v3-mac-dependencies-{{ checksum "requirements.txt" }}
 
+
 jobs:
+
   build:
     docker:
-      - image: circleci/python:3.5-jessie
+      - image: circleci/python:3.8
+    resource_class: large
     working_directory: ~/repo
     steps:
-      - *docker-caching
+      - setup_remote_docker
       - checkout
       - *restore-cache
       - *bootstrap
       - *save-cache
       - run:
-          name: run tests and build the docs
+          name: Run linting
+          command: |
+            . venv/bin/activate
+            make lint
+      - run:
+          name: Run tests
           command: |
             . venv/bin/activate
             make test
-            make docs
       - run:
-          name: build docker container
-          command: make docker
+          name: Build the docs
+          command: |
+            . venv/bin/activate
+            make docs
+      # - run:
+      #     name: build docker container
+      #     command: make docker
 
   build-macos:
     macos:
-        xcode: "10.0.0"
+        xcode: "13.0.0"
     working_directory: ~/repo
     steps:
       - checkout
@@ -92,27 +98,36 @@ jobs:
       - *bootstrap-mac
       - *save-cache-mac
       - run:
-          name: run tests and build the docs
+          name: Run linting
+          command: |
+            . venv/bin/activate
+            make lint
+      - run:
+          name: Run tests
           command: |
             . venv/bin/activate
             make test
+      - run:
+          name: Build the docs
+          command: |
+            . venv/bin/activate
             make docs
 
   deploy:
     docker:
-      - image: circleci/python:3.5
+      - image: circleci/python:3.8
     working_directory: ~/repo
     steps:
-      - *docker-caching
+      - setup_remote_docker
       - checkout
       - *restore-cache
       - *bootstrap
-      - *docker-login
+      # - *docker-login
       - *build-release
 
   deploy-macos:
     macos:
-        xcode: "10.0.0"
+        xcode: "13.0.0"
     working_directory: ~/repo
     steps:
       - checkout
@@ -125,8 +140,10 @@ jobs:
             RELEASE_CONFIRM=yes PYPI_PLATFORM=macosx_10_11_x86_64 make pypi-push
       - *save-cache-mac
 
+
 workflows:
   version: 2
+
   build-and-deploy:
     jobs:
       - build:

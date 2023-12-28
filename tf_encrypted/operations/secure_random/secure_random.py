@@ -1,25 +1,65 @@
+"""Secure random sampling."""
 import logging
 import os
 
 import tensorflow as tf
-import tf_encrypted as tfe
-
-from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
+from tensorflow.python.framework import ops
 from tensorflow.python.framework.errors import NotFoundError
 
+import tf_encrypted as tfe
 
-dirname = os.path.dirname(tfe.__file__)
-shared_object = dirname + '/operations/secure_random/secure_random_module_tf_' + tf.__version__ + '.so'
+logger = logging.getLogger("tf_encrypted")
 
-try:
-    secure_random_module = tf.load_op_library(shared_object)
-except NotFoundError:
-    logging.warning(
-        "Falling back to insecure randomness since required custom op could not be "
-        "found for the installed version of TensorFlow (" + tf.__version__ + "). "
-        "Fix this by compiling custom ops.")
-    secure_random_module = None
+SO_PATH = "{dn}/operations/secure_random/secure_random_module_tf_{tfv}.so"
+
+
+def _try_load_secure_random_module():
+    """
+    Attempt to load and return secure random module; returns None if failed.
+    """
+    so_file = SO_PATH.format(dn=os.path.dirname(tfe.__file__), tfv=tf.__version__)
+    if not os.path.exists(so_file):
+        logger.warning(
+            (
+                "Falling back to insecure randomness since the required custom op "
+                "could not be found for the installed version of TensorFlow. Fix "
+                "this by compiling custom ops. Missing file was '%s'"
+            ),
+            so_file,
+        )
+        return None
+
+    try:
+        module = tf.load_op_library(so_file)
+        logger.info("secure random module loaded: {}".format(module))
+        return module
+
+    except NotFoundError as ex:
+        logger.warning(
+            (
+                "Falling back to insecure randomness since the required custom op "
+                "could not be found for the installed version of TensorFlow. Fix "
+                "this by compiling custom ops. "
+                "Missing file was '%s', error was \"%s\"."
+            ),
+            so_file,
+            ex,
+        )
+
+    except Exception as ex:  # pylint: disable=broad-except
+        logger.error(
+            (
+                "Falling back to insecure randomness since an error occurred "
+                'loading the required custom op: "%s".'
+            ),
+            ex,
+        )
+
+    return None
+
+
+secure_random_module = _try_load_secure_random_module()
 
 
 def supports_secure_randomness():
@@ -30,7 +70,14 @@ def supports_seeded_randomness():
     return secure_random_module is not None
 
 
-def seeded_random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, seed=None, name=None):
+def seeded_random_uniform(
+    shape,
+    minval=0,
+    maxval=None,
+    dtype=tf.int32,
+    seed=None,
+    name=None,
+):
     """
     Returns cryptographically strong random numbers with a seed
 
@@ -48,7 +95,7 @@ def seeded_random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, seed=Non
     :rtype: tf.Tensor
     """
     dtype = dtypes.as_dtype(dtype)
-    if dtype not in (dtypes.int32, dtypes.int64):
+    if dtype not in (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64):
         raise ValueError("Invalid dtype %r" % dtype)
 
     if maxval is None:
@@ -60,10 +107,22 @@ def seeded_random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, seed=Non
     minval = ops.convert_to_tensor(minval, dtype=dtype, name="min")
     maxval = ops.convert_to_tensor(maxval, dtype=dtype, name="max")
 
-    return secure_random_module.secure_seeded_random_uniform(shape, seed, minval, maxval, name=name)
+    return secure_random_module.secure_seeded_random_uniform(
+        shape,
+        seed,
+        minval,
+        maxval,
+        name=name,
+    )
 
 
-def random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, name=None):
+def random_uniform(
+    shape,
+    minval=0,
+    maxval=None,
+    dtype=tf.int32,
+    name=None,
+):
     """
     Returns cryptographically strong random numbers.
 
@@ -75,14 +134,14 @@ def random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, name=None):
     :param int minval: Minimum value to return, inclusive.
     :param int maxval: Maximum value to return, exclusive.
     :param dtype: Data type of the return random values. Either int32 or int64.
-    :param tf.Tensor seed: The seed to be used when generating the random numbers.
+    :param tf.Tensor seed: A seed for generating the random numbers.
     :param str name:
 
     :rtype: tf.Tensor
     """
 
     dtype = dtypes.as_dtype(dtype)
-    if dtype not in (dtypes.int32, dtypes.int64):
+    if dtype not in (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64):
         raise ValueError("Invalid dtype %r" % dtype)
 
     if maxval is None:
@@ -91,8 +150,23 @@ def random_uniform(shape, minval=0, maxval=None, dtype=tf.int32, name=None):
     minval = ops.convert_to_tensor(minval, dtype=dtype, name="min")
     maxval = ops.convert_to_tensor(maxval, dtype=dtype, name="max")
 
-    return secure_random_module.secure_random_uniform(shape, minval, maxval, name=name)
+    return secure_random_module.secure_random_uniform(
+        shape,
+        minval,
+        maxval,
+        name=name,
+    )
 
 
-def seed():
-    return secure_random_module.secure_seed()
+def i128_seeded_random_uniform(shape, seed, minval, maxval):
+    return secure_random_module.i128_secure_seeded_random_uniform(
+        shape, seed, minval, maxval
+    )
+
+
+def i128_random_uniform(shape, minval, maxval):
+    return secure_random_module.i128_secure_random_uniform(shape, minval, maxval)
+
+
+def secure_seed(name=None):
+    return secure_random_module.secure_seed(name=name)

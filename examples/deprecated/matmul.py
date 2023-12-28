@@ -1,6 +1,6 @@
 import numpy as np
-import tf_encrypted as tfe
 
+import tf_encrypted as tfe
 
 a = np.ones((10, 10))
 
@@ -13,8 +13,8 @@ for _ in range(2):
     y = y.matmul(y)
 
 with tfe.Session() as sess:
-    sess.run(tfe.global_variables_initializer(), tag='init')
-    actual = sess.run(y.reveal(), tag='reveal')
+    sess.run(tfe.global_variables_initializer(), tag="init")
+    actual = sess.run(y.reveal(), tag="reveal")
 
     expected = b
     np.testing.assert_allclose(actual, expected)

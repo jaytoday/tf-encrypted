@@ -1,3 +1,4 @@
+"""Useful math helper functions."""
 from functools import reduce
 from math import log
 from typing import Tuple
@@ -6,9 +7,8 @@ from typing import Tuple
 def egcd(a: int, b: int) -> Tuple[int, int, int]:
     if a == 0:
         return (b, 0, 1)
-    else:
-        g, y, x = egcd(b % a, a)
-        return (g, x - (b // a) * y, y)
+    g, y, x = egcd(b % a, a)
+    return (g, x - (b // a) * y, y)
 
 
 def gcd(a: int, b: int) -> int:

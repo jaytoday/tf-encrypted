@@ -1,27 +1,35 @@
+"""Odd tensors abstraction. For internal use with SecureNN subprotocols."""
 from __future__ import absolute_import
-from typing import Tuple, Optional
-from functools import partial
 
 import abc
 import math
+from functools import partial
+from typing import Optional
+from typing import Tuple
 
 import numpy as np
 import tensorflow as tf
 
+from ...operations import secure_random
 from ...tensor.factory import AbstractTensor
 from ...tensor.shared import binarize
-from ...operations import secure_random
 
 
-def odd_factory(NATIVE_TYPE):
+def odd_factory(NATIVE_TYPE):  # pylint: disable=invalid-name
+    """
+    Produces a Factory for OddTensors with underlying tf.dtype NATIVE_TYPE.
+    """
 
     assert NATIVE_TYPE in (tf.int32, tf.int64)
 
     class Factory:
         """
-        Represents a native integer data type with one value removed in order to obtain an odd modulus.
-        More concretely, this data type wraps either tf.int32 or tf.int64 but removes -1 (mapped to 0).
-        It is currently not considered for general use but only to support subprotocols of SecureNN.
+        Represents a native integer data type. It is currently not considered for
+        general use, but only to support subprotocols of SecureNN.
+
+        One value of the native dtype is removed in order to obtain an odd modulus.
+        More concretely, this data type wraps either tf.int32 or tf.int64 but
+        removes -1, which is instead mapped to 0.
         """
 
         def tensor(self, value):
@@ -59,32 +67,30 @@ def odd_factory(NATIVE_TYPE):
             if NATIVE_TYPE is tf.int64:
                 return 2**64 - 1
 
-            raise NotImplementedError("Don't know how to handle {}".format(NATIVE_TYPE))
+            raise NotImplementedError("Incorrect native type {}.".format(NATIVE_TYPE))
 
         @property
         def native_type(self):
             return NATIVE_TYPE
 
-        def sample_uniform(self,
-                           shape,
-                           minval: Optional[int] = None,
-                           maxval: Optional[int] = None):
+        def sample_uniform(
+            self, shape, minval: Optional[int] = None, maxval: Optional[int] = None
+        ):
+            """Sample a tensor from a uniform distribution."""
             assert minval is None
             assert maxval is None
 
             if secure_random.supports_seeded_randomness():
-                seed = secure_random.seed()
+                seed = secure_random.secure_seed()
                 return OddUniformTensor(shape=shape, seed=seed)
 
-            elif secure_random.supports_secure_randomness():
-                value = _construct_value_from_sampler(sampler=secure_random.random_uniform,
-                                                      shape=shape)
-                return OddDenseTensor(value)
-
+            if secure_random.supports_secure_randomness():
+                sampler = secure_random.random_uniform
             else:
-                value = _construct_value_from_sampler(sampler=tf.random_uniform,
-                                                      shape=shape)
-                return OddDenseTensor(value)
+                sampler = tf.random_uniform
+
+            value = _construct_value_from_sampler(sampler=sampler, shape=shape)
+            return OddDenseTensor(value)
 
         def sample_bounded(self, shape, bitlength: int):
             raise NotImplementedError()
@@ -95,17 +101,23 @@ def odd_factory(NATIVE_TYPE):
         def concat(self, xs: list, axis: int):
             raise NotImplementedError()
 
-    FACTORY = Factory()
+    master_factory = Factory()
 
     class OddTensor(AbstractTensor):
         """
-        Base class for the concrete odd tensors types. Implements basic functionality needed by
-        SecureNN subprotocols from a few abstract properties implemented by concrete types below.
+        Base class for the concrete odd tensors types.
+
+        Implements basic functionality needed by SecureNN subprotocols from a few
+        abstract properties implemented by concrete types below.
         """
 
         @property
         def factory(self):
-            return FACTORY
+            return master_factory
+
+        @property
+        def device(self):
+            pass
 
         @property
         @abc.abstractproperty
@@ -117,15 +129,19 @@ def odd_factory(NATIVE_TYPE):
         def shape(self):
             pass
 
+        def identity(self):
+            value = tf.identity(self.value)
+            return OddDenseTensor(value)
+
         def __repr__(self) -> str:
-            return '{}(shape={}, native_type={})'.format(
+            return "{}(shape={}, NATIVE_TYPE={})".format(
                 type(self),
                 self.shape,
                 NATIVE_TYPE,
             )
 
-        def __getitem__(self, slice):
-            return OddDenseTensor(self.value[slice])
+        def __getitem__(self, slc):
+            return OddDenseTensor(self.value[slc])
 
         def __add__(self, other):
             return self.add(other)
@@ -134,10 +150,11 @@ def odd_factory(NATIVE_TYPE):
             return self.sub(other)
 
         def add(self, other):
+            """Add other to this tensor."""
             x, y = _lift(self, other)
-            bitlength = math.ceil(math.log2(FACTORY.modulus))
+            bitlength = math.ceil(math.log2(master_factory.modulus))
 
-            with tf.name_scope('add'):
+            with tf.name_scope("add"):
 
                 # the below avoids redundant seed expansion; can be removed once
                 # we have a (per-device) caching mechanism in place
@@ -146,25 +163,28 @@ def odd_factory(NATIVE_TYPE):
 
                 z = x_value + y_value
 
-                with tf.name_scope('correct_wrap'):
+                with tf.name_scope("correct_wrap"):
 
-                    # we want to compute whether we wrapped around, ie `pos(x) + pos(y) >= m - 1`,
-                    # for correction purposes which, since `m - 1 == 1` for signed integers, can be
-                    # rewritten as:
+                    # we want to compute whether we wrapped around, ie
+                    # `pos(x) + pos(y) >= m - 1`, for correction purposes which,
+                    # since `m - 1 == 1` for signed integers, can be rewritten as:
                     #  -> `pos(x) >= m - 1 - pos(y)`
                     #  -> `m - 1 - pos(y) - 1 < pos(x)`
                     #  -> `-1 - pos(y) - 1 < pos(x)`
                     #  -> `-2 - pos(y) < pos(x)`
-                    wrapped_around = _lessthan_as_unsigned(-2 - y_value, x_value, bitlength)
+                    wrapped_around = _lessthan_as_unsigned(
+                        -2 - y_value, x_value, bitlength
+                    )
                     z += wrapped_around
 
             return OddDenseTensor(z)
 
         def sub(self, other):
+            """Subtract other from this tensor."""
             x, y = _lift(self, other)
-            bitlength = math.ceil(math.log2(FACTORY.modulus))
+            bitlength = math.ceil(math.log2(master_factory.modulus))
 
-            with tf.name_scope('sub'):
+            with tf.name_scope("sub"):
 
                 # the below avoids redundant seed expansion; can be removed once
                 # we have a (per-device) caching mechanism in place
@@ -173,11 +193,11 @@ def odd_factory(NATIVE_TYPE):
 
                 z = x_value - y_value
 
-                with tf.name_scope('correct-wrap'):
+                with tf.name_scope("correct-wrap"):
 
-                    # we want to compute whether we wrapped around, ie `pos(x) - pos(y) < 0`,
-                    # for correction purposes which can be rewritten as
-                    #  -> `pos(x) < pos(y)`
+                    # we want to compute whether we wrapped around, ie
+                    # `pos(x) - pos(y) < 0`, for correction purposes which can be
+                    # rewritten as -> `pos(x) < pos(y)`
                     wrapped_around = _lessthan_as_unsigned(x_value, y_value, bitlength)
                     z -= wrapped_around
 
@@ -186,19 +206,19 @@ def odd_factory(NATIVE_TYPE):
         def bits(self, factory=None):
             if factory is None:
                 return OddDenseTensor(binarize(self.value))
-            else:
-                return factory.tensor(binarize(self.value))
+            return factory.tensor(binarize(self.value))
 
         def cast(self, factory):
-            if factory is FACTORY:
+            if factory is master_factory:
                 return self
-            else:
-                return factory.tensor(self.value)
+            return factory.tensor(self.value)
 
     class OddDenseTensor(OddTensor):
         """
-        Represents a tensor with explicit values (as opposed to OddUniformTensor with implicit
-        values). Internal use only and assume that invalid values have already been mapped.
+        Represents a tensor with explicit values, as opposed to OddUniformTensor
+        with implicit values.
+
+        Internal use only and assume that invalid values have already been mapped.
         """
 
         def __init__(self, value):
@@ -213,9 +233,18 @@ def odd_factory(NATIVE_TYPE):
         def shape(self):
             return self._value.shape
 
+        @property
+        def support(self):
+            return [self._value]
+
+        @property
+        def device(self):
+            return self._value.device
+
     class OddUniformTensor(OddTensor):
         """
         Represents a tensor with uniform values defined implicitly through a seed.
+
         Internal use only.
         """
 
@@ -230,11 +259,16 @@ def odd_factory(NATIVE_TYPE):
         @property
         def value(self) -> tf.Tensor:
             # TODO(Morten) result should be stored in a (per-device) cache
-            with tf.name_scope('expand-seed'):
+            with tf.name_scope("expand-seed"):
+                sampler = partial(secure_random.seeded_random_uniform, seed=self._seed)
                 value = _construct_value_from_sampler(
-                    sampler=partial(secure_random.seeded_random_uniform, seed=self._seed),
-                    shape=self._shape)
+                    sampler=sampler, shape=self._shape
+                )
                 return value
+
+        @property
+        def support(self):
+            return [self._seed]
 
     def _lift(x, y) -> Tuple[OddTensor, OddTensor]:
         """
@@ -242,7 +276,9 @@ def odd_factory(NATIVE_TYPE):
         """
 
         if isinstance(x, OddTensor) and isinstance(y, OddTensor):
-            assert x.factory == y.factory, "Incompatible types: {} and {}".format(x.factory, y.factory)
+            assert x.factory == y.factory, "Incompatible types: {} and {}".format(
+                x.factory, y.factory
+            )
             return x, y
 
         if isinstance(x, OddTensor):
@@ -258,24 +294,28 @@ def odd_factory(NATIVE_TYPE):
         raise TypeError("Don't know how to lift {} {}".format(type(x), type(y)))
 
     def _construct_value_from_sampler(sampler, shape):
+        """Sample from sampler and correct for the modified dtype."""
         # to get uniform distribution over [min, max] without -1 we sample
         # [min+1, max] and shift negative values down by one
-        unshifted_value = sampler(shape=shape,
-                                  dtype=NATIVE_TYPE,
-                                  minval=NATIVE_TYPE.min + 1,
-                                  maxval=NATIVE_TYPE.max)
-        value = tf.where(unshifted_value < 0,
-                         unshifted_value + tf.ones(shape=unshifted_value.shape,
-                                                   dtype=unshifted_value.dtype),
-                         unshifted_value)
+        unshifted_value = sampler(
+            shape=shape,
+            dtype=NATIVE_TYPE,
+            minval=NATIVE_TYPE.min + 1,
+            maxval=NATIVE_TYPE.max,
+        )
+        shifted_values = unshifted_value + tf.ones(
+            shape=unshifted_value.shape, dtype=unshifted_value.dtype
+        )
+        value = tf.where(unshifted_value < 0, shifted_values, unshifted_value)
         return value
 
     def _lessthan_as_unsigned(x, y, bitlength):
         """
-        Performs comparison `x < y` on signed integers *as if* they were unsigned, e.g. `1 < -1`.
-        Taken from Section 2-12, page 23, of [Hacker's Delight](https://www.hackersdelight.org/).
+        Performs comparison `x < y` on signed integers *as if* they were unsigned,
+        e.g. `1 < -1`. Taken from Section 2-12, page 23, of
+        [Hacker's Delight](https://www.hackersdelight.org/).
         """
-        with tf.name_scope('unsigned-compare'):
+        with tf.name_scope("unsigned-compare"):
             not_x = tf.bitwise.invert(x)
             lhs = tf.bitwise.bitwise_and(not_x, y)
             rhs = tf.bitwise.bitwise_and(tf.bitwise.bitwise_or(not_x, y), x - y)
@@ -284,11 +324,12 @@ def odd_factory(NATIVE_TYPE):
             return tf.bitwise.bitwise_and(z, tf.ones(shape=z.shape, dtype=z.dtype))
 
     def _map_minusone_to_zero(value, native_type):
-        """ Maps all -1 values to zero. """
-        return tf.where(value == -1, tf.zeros(shape=value.shape, dtype=native_type), value)
+        """Maps all -1 values to zero."""
+        zeros = tf.zeros(shape=value.shape, dtype=native_type)
+        return tf.where(tf.equal(value, -1), zeros, value)
 
-    return FACTORY
+    return master_factory
 
 
-oddInt32factory = odd_factory(tf.int32)
-oddInt64factory = odd_factory(tf.int64)
+oddint32_factory = odd_factory(tf.int32)
+oddint64_factory = odd_factory(tf.int64)

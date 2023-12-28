@@ -1,85 +1,118 @@
+"""TF Encrypted namespace."""
 from __future__ import absolute_import
-from typing import Optional, Any
+
 import inspect
-import tensorflow as tf
+import os.path
+from typing import Any
+from typing import Optional
 
-from .config import Config, LocalConfig, RemoteConfig, get_config
-from .session import Session, setTFEDebugFlag, setMonitorStatsFlag, setTFETraceFlag
-from .protocol import global_caches_updater, Pond, get_protocol
-from .player import player
-from . import protocol
-from . import layers
+from pkg_resources import DistributionNotFound
+from pkg_resources import get_distribution
+
 from . import convert
+from . import keras
 from . import operations
+from . import protocol
+from . import queue
+from . import serving
+from .config import Config
+from .config import LocalConfig
+from .config import RemoteConfig
+from .config import get_config
+from .player import player
+from .protocol import ABY3
+from .protocol import function
 
+try:
+    _dist = get_distribution("tf_encrypted")
+    # Normalize case for Windows systems
+    dist_loc = os.path.normcase(_dist.location)
+    here = os.path.normcase(__file__)
+    if not here.startswith(os.path.join(dist_loc, "tf_encrypted")):
+        # not installed, but there is another version that *is*
+        raise DistributionNotFound
+except DistributionNotFound:
+    __version__ = "Please install this project with setup.py"
+else:
+    __version__ = _dist.version
 
-_all_prot_funcs = protocol.get_all_funcs()
+__protocol__ = None
+__all_prot_funcs__ = protocol.get_all_funcs()
 
 
 def _prot_func_not_implemented(*args: Any, **kwargs: Any) -> None:
-    raise Exception(
-        "This function is not implemented in protocol {}".format(inspect.stack()[1][3])
-    )
+    msg = "This function is not implemented in protocol {}"
+    raise Exception(msg.format(inspect.stack()[1][3]))
+
+
+def _update_protocol(prot):
+    """Update current protocol in scope."""
+    global __protocol__
+    __protocol__ = prot
+
+
+def get_protocol():
+    """Return the current protocol in scope.
+
+    Note this should not be used for accessing public protocol methods, use
+    tfe.<public_protocol_method> instead.
+    """
+    return __protocol__
 
 
 def set_protocol(prot: Optional[protocol.Protocol] = None) -> None:
-    """
-    Sets the global protocol. See :class:`~tf_encrypted.protocol.protocol.Protocol` for
-    more info.
+    """Sets the global protocol.
+
+    See :class:`~tf_encrypted.protocol.protocol.Protocol` for more info.
 
     :param ~tf_encrypted.protocol.protocol.Protocol prot: A protocol instance.
     """
 
     # reset all names
-    for func_name in _all_prot_funcs:
+    for func_name in __all_prot_funcs__:
         globals()[func_name] = _prot_func_not_implemented
 
     # add global names according to new protocol
     if prot is not None:
         methods = inspect.getmembers(prot, predicate=inspect.ismethod)
-        public_methods = [method for method in methods if not method[0].startswith('_')]
+        public_methods = [method for method in methods if not method[0].startswith("_")]
         for name, func in public_methods:
             globals()[name] = func
 
     # record new protocol
-    protocol.set_protocol(prot)
+    _update_protocol(prot)
 
 
 def set_config(config: Config) -> None:
+    # pylint: disable=import-outside-toplevel
     from .config import set_config as set_global_config
+
+    # pylint: enable=import-outside-toplevel
 
     set_global_config(config)
     set_protocol(None)
 
 
-def global_variables_initializer() -> Optional[tf.Operation]:
-    prot = protocol.get_protocol()
-    if prot is not None:
-        return prot.initializer
-    else:
-        return None
-
-
-set_protocol(Pond())
-
+# from .protocol import Pond
+# set_protocol(Pond())
+set_protocol(ABY3())
 
 __all__ = [
     "LocalConfig",
     "RemoteConfig",
-    "setMonitorStatsFlag",
-    "setTFETraceFlag",
-    "setTFEDebugFlag",
+    "set_tfe_events_flag",
+    "set_tfe_trace_flag",
+    "set_log_directory",
     "get_config",
     "set_config",
-    "get_protocol",
+    "function",
     "set_protocol",
-    "Session",
-    "io",
     "player",
+    "primitives",
     "protocol",
-    "layers",
     "convert",
     "operations",
-    "global_caches_updater",
-    "global_variables_initializer",
+    "keras",
+    "queue",
+    "serving",
 ]
